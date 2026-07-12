@@ -2,21 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "name": "earl-builder-api",
-  "buildCommand": "echo 'No build needed for serverless functions'",
-  "outputDirectory": ".next",
-  "framework": null,
-  "functions": {
-    "api/**/*.py": {
-      "runtime": "python3.11",
-      "memory": 256,
-      "maxDuration": 60
-    },
-    "api/**/*.js": {
-      "runtime": "nodejs20.x",
-      "memory": 256,
-      "maxDuration": 60
-    }
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",

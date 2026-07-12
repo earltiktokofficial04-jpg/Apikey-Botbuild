@@ -46,11 +46,9 @@ Di **Vercel Dashboard → Project → Settings → Environment Variables**, tamb
 | `TURSO_URL` | URL database Turso (format: `libsql://...`) | Ya |
 | `TURSO_AUTH_TOKEN` | Auth token Turso (JWT) | Ya |
 | `GITHUB_TOKEN` | GitHub Personal Access Token | Ya |
-| `GITHUB_REPO_OWNER` | Nama owner repo GitHub | Ya |
-| `GITHUB_REPO_NAME` | Nama repo GitHub (untuk push ZIP) | Ya |
+| `GITHUB_REPO` | Owner/repo GitHub, dipisahkan `/` (contoh: `owner/nama-repo`) | Ya |
 | `GITHUB_WORKFLOW_ID` | Nama fail workflow (default: `build.yml`) | Ya |
-| `BOT_TOKEN` | Token bot Telegram (untuk notifikasi) | Tidak |
-| `BOT_USERNAME` | Username bot Telegram (tanpa @) | Tidak |
+| `BOT_TOKEN` | Token bot Telegram (untuk notifikasi & ambil username bot) | Tidak |
 
 ### 2. Deploy
 

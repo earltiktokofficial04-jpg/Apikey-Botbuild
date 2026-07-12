@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { initDatabase, bindTelegram } from '@/lib/turso';
-import { notifyTelegram } from '@/lib/github';
+import { notifyTelegram, getBotUsername } from '@/lib/github';
 
 // POST /api/user/bind-telegram — Bind Telegram ID to device
 export async function POST(request: NextRequest) {
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       'Anda kini boleh menggunakan perkhidmatan melalui aplikasi.'
     );
 
-    const botUsername = process.env.BOT_USERNAME || 'EarlBuildBot';
+    const botUsername = (await getBotUsername()) || 'EarlBuildBot';
 
     return NextResponse.json({
       success: true,

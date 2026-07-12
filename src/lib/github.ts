@@ -1,10 +1,32 @@
 // GitHub API helper for pushing files and triggering workflows
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const REPO_OWNER = process.env.GITHUB_REPO_OWNER || '';
-const REPO_NAME = process.env.GITHUB_REPO_NAME || '';
+const [REPO_OWNER, REPO_NAME] = (process.env.GITHUB_REPO || '/').split('/');
 const WORKFLOW_ID = process.env.GITHUB_WORKFLOW_ID || 'build.yml';
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
+
+let cachedBotUsername: string | null = null;
+
+// Dapatkan username bot sendiri terus dari Telegram guna BOT_TOKEN (getMe),
+// tak perlu env BOT_USERNAME lagi.
+export async function getBotUsername(): Promise<string | null> {
+  if (cachedBotUsername) return cachedBotUsername;
+  if (!BOT_TOKEN) return null;
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
+    const data = await response.json();
+
+    if (data.ok && data.result?.username) {
+      cachedBotUsername = data.result.username as string;
+      return cachedBotUsername;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function getHeaders(): Record<string, string> {
   return {
