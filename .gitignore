@@ -1,0 +1,47 @@
+# Node.js / Vercel — Standard .gitignore
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+.vercel/
+out/
+dist/
+.next/
+
+# Runtime data
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Environment & secrets (NEVER commit)
+.env
+.env.local
+.env.*.local
+*.pem
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# OS generated
+.DS_Store
+
+# Vercel CLI cache
+.vercel
+
+# Build artifacts
+.turbo/
+.cache/

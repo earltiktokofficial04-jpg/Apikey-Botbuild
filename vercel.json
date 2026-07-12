@@ -1,0 +1,45 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "name": "earl-builder-api",
+  "buildCommand": "echo 'No build needed for serverless functions'",
+  "outputDirectory": ".next",
+  "framework": null,
+  "functions": {
+    "api/**/*.py": {
+      "runtime": "python3.11",
+      "memory": 256,
+      "maxDuration": 60
+    },
+    "api/**/*.js": {
+      "runtime": "nodejs20.x",
+      "memory": 256,
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" }
+      ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/cleanup",
+      "schedule": "0 3 * * *"
+    }
+  ],
+  "regions": ["sin1"],
+  "alias": []
+}
