@@ -64,8 +64,8 @@ export async function POST(request: NextRequest) {
     sessions.set(uploadId, {
       deviceId: device_id,
       filename,
-      totalSize,
-      totalChunks,
+      totalSize: total_size,
+      totalChunks: total_chunks,
       receivedChunks: 0,
       chunks: new Map(),
       createdAt: Date.now(),
