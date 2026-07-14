@@ -9,11 +9,18 @@ export async function GET() {
       ...maintenance,
     });
   } catch (error) {
-    return NextResponse.json({
-      status: 'ok',
-      is_maintenance: false,
-      title: '',
-      message: '',
-    });
+    // Do NOT default to "online" here — if we can't even reach the
+    // database to check maintenance status, the server state is
+    // genuinely unknown, not confirmed-online. Report it as such so
+    // the apps can distinguish "off" (a real toggle) from "unreachable".
+    return NextResponse.json(
+      {
+        status: 'unavailable',
+        is_maintenance: false,
+        title: '',
+        message: '',
+      },
+      { status: 503 }
+    );
   }
 }

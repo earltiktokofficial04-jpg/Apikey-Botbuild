@@ -22,9 +22,20 @@ export async function initDatabase() {
       telegram_id TEXT UNIQUE,
       credits INTEGER NOT NULL DEFAULT 5,
       total_uploads INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      pending_verify_code TEXT,
+      pending_verify_telegram TEXT
     )
   `);
+
+  // Migrate existing tables created before verification columns existed.
+  for (const col of ['pending_verify_code', 'pending_verify_telegram']) {
+    try {
+      await client.execute(`ALTER TABLE users ADD COLUMN ${col} TEXT`);
+    } catch {
+      // column already exists — ignore
+    }
+  }
 
   await client.execute(`
     CREATE TABLE IF NOT EXISTS credit_codes (
@@ -103,25 +114,98 @@ export async function getUserByTelegram(telegramId: string): Promise<UserRecord 
   return result.rows.length > 0 ? (result.rows[0] as unknown as UserRecord) : null;
 }
 
-export async function bindTelegram(deviceId: string, telegramId: string): Promise<{ success: boolean; message: string }> {
+function generateVerifyCode(): string {
+  const chars = '0123456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+// Step 1 — device requests to bind a Telegram ID. A verification code is
+// generated and stored against this device; the caller is responsible for
+// sending it to the user via Telegram (wrapped in <blockquote>) so only
+// someone with access to that Telegram account can complete the bind.
+export async function requestBindVerification(
+  deviceId: string,
+  telegramId: string
+): Promise<{ success: boolean; message: string; code?: string }> {
   const client = getTursoClient();
+  const user = await getUser(deviceId);
 
-  // Check if telegram_id already bound to another device
-  const existing = await client.execute({
-    sql: 'SELECT device_id FROM users WHERE telegram_id = ?',
-    args: [telegramId],
-  });
-
-  if (existing.rows.length > 0 && String(existing.rows[0].device_id) !== deviceId) {
-    return { success: false, message: 'Telegram ID ini sudah diikat ke device lain.' };
+  if (user.telegram_id) {
+    return {
+      success: false,
+      message: 'Device ini sudah diikat ke satu akaun Telegram. Sila unbind dahulu.',
+    };
   }
 
+  const code = generateVerifyCode();
   await client.execute({
-    sql: 'UPDATE users SET telegram_id = ? WHERE device_id = ?',
+    sql: 'UPDATE users SET pending_verify_code = ?, pending_verify_telegram = ? WHERE device_id = ?',
+    args: [code, telegramId, deviceId],
+  });
+
+  return { success: true, message: 'Kod pengesahan telah dijana.', code };
+}
+
+// Step 2 — device submits the code it received via Telegram. On success,
+// the telegram_id is released from any other device that previously held
+// it (a fresh, verified bind always wins over a stale one).
+export async function confirmBindVerification(
+  deviceId: string,
+  code: string
+): Promise<{ success: boolean; message: string }> {
+  const client = getTursoClient();
+
+  const result = await client.execute({
+    sql: 'SELECT pending_verify_code, pending_verify_telegram FROM users WHERE device_id = ?',
+    args: [deviceId],
+  });
+
+  if (result.rows.length === 0) {
+    return { success: false, message: 'Device tidak dijumpai.' };
+  }
+
+  const row = result.rows[0] as unknown as {
+    pending_verify_code: string | null;
+    pending_verify_telegram: string | null;
+  };
+
+  if (!row.pending_verify_code || !row.pending_verify_telegram) {
+    return { success: false, message: 'Tiada permintaan pengesahan aktif. Sila mula semula.' };
+  }
+
+  if (String(row.pending_verify_code) !== String(code).trim()) {
+    return { success: false, message: 'Kod pengesahan salah.' };
+  }
+
+  const telegramId = row.pending_verify_telegram;
+
+  // Release this Telegram ID from any other device that had it bound —
+  // a device that just completed verification takes priority over an
+  // old, unverified binding elsewhere.
+  await client.execute({
+    sql: 'UPDATE users SET telegram_id = NULL WHERE telegram_id = ? AND device_id != ?',
+    args: [telegramId, deviceId],
+  });
+
+  await client.execute({
+    sql: 'UPDATE users SET telegram_id = ?, pending_verify_code = NULL, pending_verify_telegram = NULL WHERE device_id = ?',
     args: [telegramId, deviceId],
   });
 
   return { success: true, message: 'Telegram berjaya diikat.' };
+}
+
+// Unbind — required before a device that already has a Telegram ID bound
+// can start a new bind request.
+export async function unbindTelegram(deviceId: string): Promise<{ success: boolean; message: string }> {
+  const client = getTursoClient();
+  await client.execute({
+    sql: 'UPDATE users SET telegram_id = NULL, pending_verify_code = NULL, pending_verify_telegram = NULL WHERE device_id = ?',
+    args: [deviceId],
+  });
+  return { success: true, message: 'Telegram berjaya diunbind.' };
 }
 
 export async function deductCredits(deviceId: string, amount: number): Promise<{ success: boolean; credits: number; message: string }> {

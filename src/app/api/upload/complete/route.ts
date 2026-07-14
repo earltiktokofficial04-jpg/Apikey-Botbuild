@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { initDatabase, deductCredits, getUser } from '@/lib/turso';
 import { pushToGitHub, triggerWorkflow } from '@/lib/github';
+import { detectProjectType } from '@/lib/detect';
 
-// POST /api/upload/complete — Assemble chunks, push to GitHub, deduct credits
+// POST /api/upload/complete — Assemble chunks, auto-detect framework,
+// push to GitHub, deduct credits
 export async function POST(request: NextRequest) {
   try {
     await initDatabase();
   } catch {}
 
   try {
-    const { upload_id, project_type } = await request.json();
+    const { upload_id } = await request.json();
 
     if (!upload_id) {
       return NextResponse.json({ error: 'upload_id diperlukan.' }, { status: 400 });
@@ -59,6 +61,22 @@ export async function POST(request: NextRequest) {
 
     const assembledBuffer = Buffer.concat(chunks);
 
+    // Auto-detect the project framework, same logic as panel_bot's
+    // detect_project() — the user never picks this manually.
+    const detectedType = detectProjectType(assembledBuffer);
+
+    if (!detectedType) {
+      // Clean up session but do not charge credits for an unrecognized project.
+      sessions.delete(upload_id);
+      return NextResponse.json(
+        {
+          error:
+            'Tidak dapat mengesan jenis projek ini. Pastikan ZIP mengandungi projek Flutter, Native Android, Smali, React Native, Cordova, Ionic, atau Capacitor yang sah.',
+        },
+        { status: 422 }
+      );
+    }
+
     // Clean up session
     sessions.delete(upload_id);
 
@@ -88,7 +106,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Trigger GitHub Actions workflow
-    await triggerWorkflow(project_type || 'Flutter', pushResult.uniqueName);
+    await triggerWorkflow(detectedType, pushResult.uniqueName);
 
     // Get updated user info
     const user = await getUser(session.deviceId);
@@ -98,6 +116,7 @@ export async function POST(request: NextRequest) {
       message: 'Projek berjaya dihantar dan build dimulakan!',
       credits: user.credits,
       unique_name: pushResult.uniqueName,
+      detected_project_type: detectedType,
     });
   } catch (error) {
     return NextResponse.json(

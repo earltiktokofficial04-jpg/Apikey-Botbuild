@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { initDatabase, bindTelegram } from '@/lib/turso';
+import { initDatabase, requestBindVerification } from '@/lib/turso';
 import { notifyTelegram, getBotUsername } from '@/lib/github';
 
-// POST /api/user/bind-telegram — Bind Telegram ID to device
+// POST /api/user/bind-telegram — Step 1: request a verification code.
+// The code is sent to the user's Telegram (wrapped in <blockquote> so it's
+// unambiguous what to copy), and must be submitted to
+// /api/user/bind-telegram/confirm before the bind actually takes effect.
 export async function POST(request: NextRequest) {
   try {
     await initDatabase();
@@ -18,29 +21,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await bindTelegram(device_id, telegram_id);
+    const result = await requestBindVerification(device_id, telegram_id);
 
-    if (!result.success) {
+    if (!result.success || !result.code) {
       return NextResponse.json({ success: false, message: result.message }, { status: 400 });
     }
 
-    // Try to notify user via Telegram bot
+    // Send the verification code via Telegram, wrapped in <blockquote> so
+    // it's clearly a single value the user should copy into the app.
     const notifResult = await notifyTelegram(
       telegram_id,
-      '<b>Pengikatan Berjaya</b>\n\n' +
-      'Device anda telah berjaya diikat ke akaun Telegram ini.\n' +
-      'Anda kini boleh menggunakan perkhidmatan melalui aplikasi.'
+      '<b>Pengesahan Pengikatan Device</b>\n\n' +
+      'Salin kod di bawah dan masukkan dalam aplikasi untuk sahkan pengikatan:\n\n' +
+      `<blockquote>${result.code}</blockquote>\n\n` +
+      'Jangan kongsi kod ini dengan sesiapa.'
     );
 
     const botUsername = (await getBotUsername()) || 'EarlBuildBot';
 
     return NextResponse.json({
       success: true,
-      message: 'Telegram berjaya diikat!',
+      message: notifResult.success
+        ? 'Kod pengesahan telah dihantar ke Telegram anda.'
+        : 'Kod dijana tetapi gagal dihantar ke Telegram.',
       telegram_notified: notifResult.success,
       guidance: notifResult.success
         ? null
-        : `Sila hantar /start di http://t.me/${botUsername} untuk mengaktifkan notifikasi.`,
+        : `Sila hantar /start di http://t.me/${botUsername} dahulu, kemudian cuba lagi.`,
     });
   } catch (error) {
     return NextResponse.json(
