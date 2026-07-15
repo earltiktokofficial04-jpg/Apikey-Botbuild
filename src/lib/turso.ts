@@ -253,6 +253,20 @@ export async function getAllUsers(): Promise<UserRecord[]> {
   return result.rows as unknown as UserRecord[];
 }
 
+export async function deleteUser(deviceId: string): Promise<{ success: boolean; message: string }> {
+  const client = getTursoClient();
+  const result = await client.execute({
+    sql: 'DELETE FROM users WHERE device_id = ?',
+    args: [deviceId],
+  });
+
+  if (result.rowsAffected === 0) {
+    return { success: false, message: 'User tidak dijumpai.' };
+  }
+
+  return { success: true, message: 'User berjaya dipadam.' };
+}
+
 export async function getUserCount(): Promise<number> {
   const client = getTursoClient();
   const result = await client.execute('SELECT COUNT(*) as count FROM users');

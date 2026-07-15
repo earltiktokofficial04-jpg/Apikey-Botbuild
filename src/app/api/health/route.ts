@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { checkMaintenance } from '@/lib/turso';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET() {
   try {
     const maintenance = await checkMaintenance();

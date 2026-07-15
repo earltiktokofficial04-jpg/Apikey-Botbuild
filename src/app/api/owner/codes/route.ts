@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { initDatabase, getActiveCodes } from '@/lib/turso';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // GET /api/owner/codes — List active/unused credit codes
 export async function GET() {
   try {

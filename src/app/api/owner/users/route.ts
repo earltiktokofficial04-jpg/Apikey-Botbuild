@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { initDatabase, getAllUsers, getUserCount } from '@/lib/turso';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // GET /api/owner/users — List all users
 export async function GET() {
   try {
