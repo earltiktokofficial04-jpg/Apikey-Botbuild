@@ -66,6 +66,9 @@ export async function initDatabase() {
   await client.execute(`
     INSERT OR IGNORE INTO server_config (key, value) VALUES ('maintenance_message', 'Sila cuba lagi nanti. Server sedang dalam proses penyelenggaraan.')
   `);
+  await client.execute(`
+    INSERT OR IGNORE INTO server_config (key, value) VALUES ('maintenance_music_url', '')
+  `);
 
   return true;
 }
@@ -364,6 +367,7 @@ export interface ServerConfig {
   maintenance_mode: string;
   maintenance_title: string;
   maintenance_message: string;
+  maintenance_music_url: string;
 }
 
 export async function getServerConfig(): Promise<ServerConfig> {
@@ -377,15 +381,17 @@ export async function getServerConfig(): Promise<ServerConfig> {
     maintenance_mode: config.maintenance_mode || 'off',
     maintenance_title: config.maintenance_title || 'Server Sedang Maintenance',
     maintenance_message: config.maintenance_message || 'Sila cuba lagi nanti.',
+    maintenance_music_url: config.maintenance_music_url || '',
   };
 }
 
-export async function checkMaintenance(): Promise<{ is_maintenance: boolean; title: string; message: string }> {
+export async function checkMaintenance(): Promise<{ is_maintenance: boolean; title: string; message: string; music_url: string }> {
   const config = await getServerConfig();
   return {
     is_maintenance: config.maintenance_mode === 'on',
     title: config.maintenance_title,
     message: config.maintenance_message,
+    music_url: config.maintenance_music_url,
   };
 }
 
@@ -397,9 +403,15 @@ export async function setServerConfig(key: string, value: string): Promise<void>
   });
 }
 
-export async function toggleMaintenance(mode: string, title?: string, message?: string): Promise<ServerConfig> {
+export async function toggleMaintenance(
+  mode: string,
+  title?: string,
+  message?: string,
+  musicUrl?: string
+): Promise<ServerConfig> {
   await setServerConfig('maintenance_mode', mode);
   if (title !== undefined) await setServerConfig('maintenance_title', title);
   if (message !== undefined) await setServerConfig('maintenance_message', message);
+  if (musicUrl !== undefined) await setServerConfig('maintenance_music_url', musicUrl);
   return getServerConfig();
 }

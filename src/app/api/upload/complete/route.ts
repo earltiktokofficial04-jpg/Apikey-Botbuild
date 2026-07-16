@@ -80,6 +80,17 @@ export async function POST(request: NextRequest) {
     // Clean up session
     sessions.delete(upload_id);
 
+    // The build workflow requires a Telegram chat_id to report progress
+    // and deliver the finished APK to — this must exist before we spend
+    // a credit or push anything to GitHub.
+    const requestingUser = await getUser(session.deviceId);
+    if (!requestingUser.telegram_id) {
+      return NextResponse.json(
+        { error: 'Sila ikat akaun Telegram dahulu sebelum menghantar projek.' },
+        { status: 400 }
+      );
+    }
+
     // Deduct credits
     const UPLOAD_COST = 1;
     const deductionResult = await deductCredits(session.deviceId, UPLOAD_COST);
@@ -105,8 +116,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Trigger GitHub Actions workflow
-    await triggerWorkflow(detectedType, pushResult.uniqueName);
+    // Trigger GitHub Actions workflow — the file is on GitHub at this
+    // point, but the build genuinely hasn't started until this dispatch
+    // succeeds. A rejected dispatch (e.g. a required input missing) must
+    // not be reported to the user as "build started".
+    const workflowResult = await triggerWorkflow(
+      detectedType,
+      pushResult.uniqueName,
+      requestingUser.telegram_id
+    );
+
+    if (!workflowResult.success) {
+      const { addCredits } = await import('@/lib/turso');
+      await addCredits(session.deviceId, UPLOAD_COST);
+
+      return NextResponse.json(
+        { error: workflowResult.error || 'Gagal memulakan build di GitHub Actions.' },
+        { status: 502 }
+      );
+    }
 
     // Get updated user info
     const user = await getUser(session.deviceId);

@@ -4,6 +4,12 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const [REPO_OWNER, REPO_NAME] = (process.env.GITHUB_REPO || '/').split('/');
 const WORKFLOW_ID = process.env.GITHUB_WORKFLOW_ID || 'build.yml';
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
+// Required by the build workflow (see .github/workflows/build.yml in the
+// builder repo) — without these, GitHub rejects the workflow_dispatch call
+// entirely (the file still gets pushed to temp/, but no build ever starts).
+const CHANNEL_ID = process.env.CHANNEL_ID || '';
+const API_ID = process.env.API_ID || '';
+const API_HASH = process.env.API_HASH || '';
 
 let cachedBotUsername: string | null = null;
 
@@ -81,11 +87,17 @@ export async function pushToGitHub(
 
 export async function triggerWorkflow(
   projectType: string,
-  uniqueName: string
-): Promise<boolean> {
-  if (!GITHUB_TOKEN) return false;
+  uniqueName: string,
+  telegramId: string,
+  userDisplay?: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!GITHUB_TOKEN) return { success: false, error: 'GitHub token not configured' };
 
   try {
+    // Same idea as panel_bot's get_github_queue() — count active/queued
+    // runs so the worker can show an accurate queue position.
+    const inProgress = await getBuildQueue();
+
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_ID}/dispatches`;
 
     const response = await fetch(url, {
@@ -97,13 +109,33 @@ export async function triggerWorkflow(
           project_type: projectType,
           target: uniqueName,
           bot_token: BOT_TOKEN,
+          chat_id: String(telegramId),
+          user_display: userDisplay || `ID:${telegramId}`,
+          in_progress: String(inProgress + 1),
+          channel_id: CHANNEL_ID,
+          api_id: API_ID,
+          api_hash: API_HASH,
         },
       }),
     });
 
-    return response.status === 204;
-  } catch {
-    return false;
+    if (response.status === 204) {
+      return { success: true };
+    }
+
+    // GitHub returns 422 (with a body explaining which input failed) when
+    // a required input is missing — surface that instead of pretending
+    // the build started.
+    const errorBody = await response.text().catch(() => '');
+    return {
+      success: false,
+      error: `GitHub workflow dispatch failed (${response.status}): ${errorBody || 'unknown error'}`,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
   }
 }
 

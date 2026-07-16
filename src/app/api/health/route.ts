@@ -22,6 +22,7 @@ export async function GET() {
         is_maintenance: false,
         title: '',
         message: '',
+        music_url: '',
       },
       { status: 503 }
     );

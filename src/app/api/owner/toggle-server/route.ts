@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
   } catch {}
 
   try {
-    const { mode, title, message } = await request.json();
+    const { mode, title, message, music_url } = await request.json();
 
     if (!mode || !['on', 'off'].includes(mode)) {
       return NextResponse.json(
@@ -17,13 +17,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const config = await toggleMaintenance(mode, title, message);
+    const config = await toggleMaintenance(mode, title, message, music_url);
 
     return NextResponse.json({
       success: true,
       maintenance_mode: config.maintenance_mode,
       maintenance_title: config.maintenance_title,
       maintenance_message: config.maintenance_message,
+      maintenance_music_url: config.maintenance_music_url,
       message: mode === 'on'
         ? 'Server kini dalam mode maintenance.'
         : 'Server kini kembali online.',
