@@ -16,7 +16,9 @@ src/
 │   │   ├── bind-telegram/route.ts → Step 1: request verification code
 │   │   ├── bind-telegram/confirm/route.ts → Step 2: confirm code, bind
 │   │   ├── unbind-telegram/route.ts → Unbind Telegram from device
-│   │   └── claim-code/route.ts   → Claim credit code
+│   │   ├── claim-code/route.ts   → Claim credit code
+│   │   ├── ads/route.ts          → Get the ad targeted at this device, if any
+│   │   └── claim-ad-reward/route.ts → Claim credits after watching an ad
 │   ├── upload/
 │   │   ├── init/route.ts         → Start chunked upload session
 │   │   ├── chunk/route.ts        → Receive one chunk
@@ -26,11 +28,16 @@ src/
 │   └── owner/
 │       ├── users/route.ts        → List all users
 │       ├── delete-user/route.ts  → Delete a user
+│       ├── bulk-delete-users/route.ts → Bulk-delete users
 │       ├── add-credit/route.ts   → Add credit directly
 │       ├── generate-code/route.ts → Generate credit codes
 │       ├── codes/route.ts        → List active codes
+│       ├── bulk-delete-codes/route.ts → Bulk-delete codes
 │       ├── toggle-server/route.ts → Toggle maintenance mode (+ music_url)
-│       └── server-status/route.ts → Get server config
+│       ├── server-status/route.ts → Get server config
+│       ├── create-ad/route.ts    → Create a per-user ad
+│       ├── ads/route.ts          → List all ads
+│       └── delete-ads/route.ts   → Bulk-delete ads
 └── lib/
     ├── turso.ts                  → Turso database helper
     ├── github.ts                 → GitHub API + Telegram notification
@@ -113,6 +120,8 @@ Untuk menukar link Vercel deployment di aplikasi Flutter, edit fail ini:
 | POST | `/api/user/bind-telegram/confirm` | `{device_id, code}` | Step 2: confirm code, complete bind |
 | POST | `/api/user/unbind-telegram` | `{device_id}` | Unbind Telegram from device |
 | POST | `/api/user/claim-code` | `{device_id, code}` | Claim code |
+| GET | `/api/user/ads?device_id=` | - | Get the ad currently targeted at this device (or its bound Telegram ID), if any |
+| POST | `/api/user/claim-ad-reward` | `{device_id, ad_id, watch_seconds}` | Claim credits after watching an ad (min. 10s) — reward (1-100, weighted) is rolled server-side |
 
 ### Upload (Chunked)
 
@@ -128,11 +137,18 @@ Untuk menukar link Vercel deployment di aplikasi Flutter, edit fail ini:
 |--------|-------|------|-------------|
 | GET | `/api/owner/users` | - | List all users |
 | POST | `/api/owner/delete-user` | `{device_id}` | Delete a user |
+| POST | `/api/owner/bulk-delete-users` | `{device_ids}` | Bulk-delete users |
 | POST | `/api/owner/add-credit` | `{target, amount}` | Add credit |
 | POST | `/api/owner/generate-code` | `{amount, count}` | Generate codes |
 | GET | `/api/owner/codes` | - | List active codes |
+| POST | `/api/owner/bulk-delete-codes` | `{codes}` | Bulk-delete codes |
 | POST | `/api/owner/toggle-server` | `{mode, title?, message?, music_url?}` | Toggle maintenance (`music_url` loops in the background on the user app while offline) |
 | GET | `/api/owner/server-status` | - | Get server config |
+| POST | `/api/owner/create-ad` | `{media_url, click_url?, title?, caption?, target_device_id? or target_telegram_id?, limit_type, limit_value}` | Create an ad targeted at exactly one user |
+| GET | `/api/owner/ads` | - | List all ads |
+| POST | `/api/owner/delete-ads` | `{ids}` | Bulk-delete ads |
+
+> **Ads are per-user by design.** Each ad targets exactly one `target_device_id` or `target_telegram_id` — there is no broadcast/global ad. `limit_type` is either `"views"` (ad disables after N watches) or `"days"` (ad expires N days after creation), never both. The reward amount (1-100 credits) is rolled server-side in `claimAdReward()` using a fixed, undisclosed weighted distribution — neither app ever sees or influences the odds.
 
 ---
 

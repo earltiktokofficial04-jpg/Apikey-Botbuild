@@ -70,6 +70,22 @@ export async function initDatabase() {
     INSERT OR IGNORE INTO server_config (key, value) VALUES ('maintenance_music_url', '')
   `);
 
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS ads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      media_url TEXT NOT NULL,
+      click_url TEXT,
+      title TEXT,
+      caption TEXT,
+      target_device_id TEXT,
+      target_telegram_id TEXT,
+      limit_type TEXT NOT NULL DEFAULT 'views',
+      limit_value INTEGER NOT NULL DEFAULT 1,
+      views_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
   return true;
 }
 
@@ -270,6 +286,19 @@ export async function deleteUser(deviceId: string): Promise<{ success: boolean; 
   return { success: true, message: 'User berjaya dipadam.' };
 }
 
+export async function deleteUsers(deviceIds: string[]): Promise<{ success: boolean; deleted: number }> {
+  const client = getTursoClient();
+  let deleted = 0;
+  for (const id of deviceIds) {
+    const result = await client.execute({
+      sql: 'DELETE FROM users WHERE device_id = ?',
+      args: [id],
+    });
+    deleted += result.rowsAffected;
+  }
+  return { success: true, deleted };
+}
+
 export async function getUserCount(): Promise<number> {
   const client = getTursoClient();
   const result = await client.execute('SELECT COUNT(*) as count FROM users');
@@ -361,6 +390,19 @@ export async function getActiveCodes(): Promise<CreditCode[]> {
   return result.rows as unknown as CreditCode[];
 }
 
+export async function deleteCodes(codes: string[]): Promise<{ success: boolean; deleted: number }> {
+  const client = getTursoClient();
+  let deleted = 0;
+  for (const code of codes) {
+    const result = await client.execute({
+      sql: 'DELETE FROM credit_codes WHERE code = ?',
+      args: [code],
+    });
+    deleted += result.rowsAffected;
+  }
+  return { success: true, deleted };
+}
+
 // ─── Server Config ──────────────────────────────────────────────────────
 
 export interface ServerConfig {
@@ -414,4 +456,175 @@ export async function toggleMaintenance(
   if (message !== undefined) await setServerConfig('maintenance_message', message);
   if (musicUrl !== undefined) await setServerConfig('maintenance_music_url', musicUrl);
   return getServerConfig();
+}
+
+// ─── Ads ──────────────────────────────────────────────────────────────
+// Ads are per-user: each one targets exactly one device_id or telegram_id.
+// A user only ever sees an ad the owner specifically pointed at them —
+// there is no broadcast/global ad. The reward roll lives entirely here,
+// server-side, so nothing about the odds is reachable from either app.
+
+export interface AdRecord {
+  id: number;
+  media_url: string;
+  click_url: string | null;
+  title: string | null;
+  caption: string | null;
+  target_device_id: string | null;
+  target_telegram_id: string | null;
+  limit_type: 'views' | 'days';
+  limit_value: number;
+  views_count: number;
+  created_at: string;
+}
+
+export async function createAd(params: {
+  mediaUrl: string;
+  clickUrl?: string;
+  title?: string;
+  caption?: string;
+  targetDeviceId?: string;
+  targetTelegramId?: string;
+  limitType: 'views' | 'days';
+  limitValue: number;
+}): Promise<AdRecord> {
+  const client = getTursoClient();
+  const result = await client.execute({
+    sql: `INSERT INTO ads (media_url, click_url, title, caption, target_device_id, target_telegram_id, limit_type, limit_value)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+    args: [
+      params.mediaUrl,
+      params.clickUrl || null,
+      params.title || null,
+      params.caption || null,
+      params.targetDeviceId || null,
+      params.targetTelegramId || null,
+      params.limitType,
+      params.limitValue,
+    ],
+  });
+  return result.rows[0] as unknown as AdRecord;
+}
+
+export async function getAds(): Promise<AdRecord[]> {
+  const client = getTursoClient();
+  const result = await client.execute('SELECT * FROM ads ORDER BY created_at DESC');
+  return result.rows as unknown as AdRecord[];
+}
+
+export async function deleteAds(ids: number[]): Promise<{ success: boolean; deleted: number }> {
+  const client = getTursoClient();
+  let deleted = 0;
+  for (const id of ids) {
+    const result = await client.execute({
+      sql: 'DELETE FROM ads WHERE id = ?',
+      args: [id],
+    });
+    deleted += result.rowsAffected;
+  }
+  return { success: true, deleted };
+}
+
+// Returns the ad currently active for this device — i.e. targeted at
+// this device_id or its bound telegram_id, and not yet expired by its
+// own views/days limit. Null if nothing is available to show.
+export async function getActiveAdForUser(deviceId: string, telegramId: string | null): Promise<AdRecord | null> {
+  const client = getTursoClient();
+  const result = await client.execute({
+    sql: `SELECT * FROM ads
+          WHERE (target_device_id = ? OR (target_telegram_id IS NOT NULL AND target_telegram_id = ?))
+          ORDER BY created_at DESC`,
+    args: [deviceId, telegramId || ''],
+  });
+
+  for (const row of result.rows as unknown as AdRecord[]) {
+    if (row.limit_type === 'views') {
+      if (row.views_count < row.limit_value) return row;
+    } else {
+      const created = new Date(row.created_at + 'Z').getTime();
+      const expiresAt = created + row.limit_value * 24 * 60 * 60 * 1000;
+      if (Date.now() < expiresAt) return row;
+    }
+  }
+  return null;
+}
+
+// Weighted random reward roll — higher amounts are deliberately rarer.
+// Kept private to this module; neither app can see or influence this.
+function rollAdReward(): number {
+  const r = Math.random() * 100;
+  let lo: number, hi: number;
+  if (r < 60) {
+    [lo, hi] = [1, 10];
+  } else if (r < 85) {
+    [lo, hi] = [11, 25];
+  } else if (r < 95) {
+    [lo, hi] = [26, 50];
+  } else if (r < 99) {
+    [lo, hi] = [51, 75];
+  } else {
+    [lo, hi] = [76, 100];
+  }
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+export async function claimAdReward(
+  deviceId: string,
+  adId: number,
+  watchSeconds: number
+): Promise<{ success: boolean; message: string; reward?: number; credits?: number }> {
+  const MIN_WATCH_SECONDS = 10;
+
+  if (watchSeconds < MIN_WATCH_SECONDS) {
+    return { success: false, message: 'Ad was not watched long enough.' };
+  }
+
+  const client = getTursoClient();
+  const user = await getUser(deviceId);
+  const adResult = await client.execute({
+    sql: 'SELECT * FROM ads WHERE id = ?',
+    args: [adId],
+  });
+
+  if (adResult.rows.length === 0) {
+    return { success: false, message: 'Ad not found.' };
+  }
+
+  const ad = adResult.rows[0] as unknown as AdRecord;
+  const targetsThisUser =
+    ad.target_device_id === deviceId ||
+    (ad.target_telegram_id && user.telegram_id && ad.target_telegram_id === user.telegram_id);
+
+  if (!targetsThisUser) {
+    return { success: false, message: 'This ad is not available for your account.' };
+  }
+
+  const stillActive =
+    ad.limit_type === 'views'
+      ? ad.views_count < ad.limit_value
+      : Date.now() < new Date(ad.created_at + 'Z').getTime() + ad.limit_value * 24 * 60 * 60 * 1000;
+
+  if (!stillActive) {
+    return { success: false, message: 'This ad is no longer available.' };
+  }
+
+  const reward = rollAdReward();
+
+  await client.execute({
+    sql: 'UPDATE ads SET views_count = views_count + 1 WHERE id = ?',
+    args: [adId],
+  });
+  await client.execute({
+    sql: 'UPDATE users SET credits = credits + ? WHERE device_id = ?',
+    args: [reward, deviceId],
+  });
+
+  const updatedUser = await getUser(deviceId);
+
+  return {
+    success: true,
+    message: `You earned ${reward} credits!`,
+    reward,
+    credits: updatedUser.credits,
+  };
 }
