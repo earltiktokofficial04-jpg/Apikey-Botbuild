@@ -18,12 +18,6 @@ export async function POST(request: NextRequest) {
     if (!media_url) {
       return NextResponse.json({ error: 'media_url diperlukan.' }, { status: 400 });
     }
-    if (!target_device_id && !target_telegram_id) {
-      return NextResponse.json(
-        { error: 'target_device_id atau target_telegram_id diperlukan.' },
-        { status: 400 }
-      );
-    }
     if (!['views', 'days'].includes(limit_type)) {
       return NextResponse.json({ error: 'limit_type mesti "views" atau "days".' }, { status: 400 });
     }

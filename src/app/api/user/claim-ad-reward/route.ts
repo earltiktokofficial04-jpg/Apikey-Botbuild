@@ -25,7 +25,13 @@ export async function POST(request: NextRequest) {
     const result = await claimAdReward(device_id, parseInt(ad_id), Number(watch_seconds));
 
     return NextResponse.json(
-      { success: result.success, message: result.message, reward: result.reward, credits: result.credits },
+      {
+        success: result.success,
+        message: result.message,
+        reward: result.reward,
+        credits: result.credits,
+        daily_remaining: result.daily_remaining,
+      },
       { status: result.success ? 200 : 400 }
     );
   } catch (error) {

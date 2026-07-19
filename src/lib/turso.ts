@@ -24,17 +24,29 @@ export async function initDatabase() {
       total_uploads INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       pending_verify_code TEXT,
-      pending_verify_telegram TEXT
+      pending_verify_telegram TEXT,
+      daily_ad_count INTEGER NOT NULL DEFAULT 0,
+      daily_ad_date TEXT NOT NULL DEFAULT ''
     )
   `);
 
-  // Migrate existing tables created before verification columns existed.
+  // Migrate existing tables created before verification/ad-limit columns existed.
   for (const col of ['pending_verify_code', 'pending_verify_telegram']) {
     try {
       await client.execute(`ALTER TABLE users ADD COLUMN ${col} TEXT`);
     } catch {
       // column already exists — ignore
     }
+  }
+  try {
+    await client.execute(`ALTER TABLE users ADD COLUMN daily_ad_count INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // column already exists — ignore
+  }
+  try {
+    await client.execute(`ALTER TABLE users ADD COLUMN daily_ad_date TEXT NOT NULL DEFAULT ''`);
+  } catch {
+    // column already exists — ignore
   }
 
   await client.execute(`
@@ -97,6 +109,8 @@ export interface UserRecord {
   credits: number;
   total_uploads: number;
   created_at: string;
+  daily_ad_count?: number;
+  daily_ad_date?: string;
 }
 
 export async function getUser(deviceId: string): Promise<UserRecord> {
@@ -489,6 +503,8 @@ export async function createAd(params: {
   limitValue: number;
 }): Promise<AdRecord> {
   const client = getTursoClient();
+  const targetDeviceId = params.targetDeviceId?.trim() || null;
+  const targetTelegramId = params.targetTelegramId?.trim() || null;
   const result = await client.execute({
     sql: `INSERT INTO ads (media_url, click_url, title, caption, target_device_id, target_telegram_id, limit_type, limit_value)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
@@ -497,8 +513,10 @@ export async function createAd(params: {
       params.clickUrl || null,
       params.title || null,
       params.caption || null,
-      params.targetDeviceId || null,
-      params.targetTelegramId || null,
+      // Target is optional — an ad with neither set is a broadcast ad,
+      // visible to every user (e.g. the owner's own general promotions).
+      targetDeviceId,
+      targetTelegramId,
       params.limitType,
       params.limitValue,
     ],
@@ -525,28 +543,59 @@ export async function deleteAds(ids: number[]): Promise<{ success: boolean; dele
   return { success: true, deleted };
 }
 
-// Returns the ad currently active for this device — i.e. targeted at
-// this device_id or its bound telegram_id, and not yet expired by its
-// own views/days limit. Null if nothing is available to show.
+function isAdStillActive(row: AdRecord): boolean {
+  if (row.limit_type === 'views') {
+    return row.views_count < row.limit_value;
+  }
+  const created = new Date(row.created_at + 'Z').getTime();
+  const expiresAt = created + row.limit_value * 24 * 60 * 60 * 1000;
+  return Date.now() < expiresAt;
+}
+
+// Returns the ad currently available to this device — either one
+// explicitly targeted at this device_id / bound telegram_id, or a
+// broadcast ad (no target set at all) — whichever is newest and not yet
+// expired by its own views/days limit. Null if nothing is available.
 export async function getActiveAdForUser(deviceId: string, telegramId: string | null): Promise<AdRecord | null> {
   const client = getTursoClient();
   const result = await client.execute({
     sql: `SELECT * FROM ads
-          WHERE (target_device_id = ? OR (target_telegram_id IS NOT NULL AND target_telegram_id = ?))
+          WHERE target_device_id = ?
+             OR (target_telegram_id IS NOT NULL AND target_telegram_id = ?)
+             OR (target_device_id IS NULL AND target_telegram_id IS NULL)
           ORDER BY created_at DESC`,
     args: [deviceId, telegramId || ''],
   });
 
   for (const row of result.rows as unknown as AdRecord[]) {
-    if (row.limit_type === 'views') {
-      if (row.views_count < row.limit_value) return row;
-    } else {
-      const created = new Date(row.created_at + 'Z').getTime();
-      const expiresAt = created + row.limit_value * 24 * 60 * 60 * 1000;
-      if (Date.now() < expiresAt) return row;
-    }
+    if (isAdStillActive(row)) return row;
   }
   return null;
+}
+
+// Same-day tracking uses Asia/Kuala_Lumpur's calendar date (UTC+8, no
+// DST) — not the server's own timezone — so the daily cap always resets
+// at midnight local time for the owner/users, regardless of where the
+// Vercel function happens to run.
+const DAILY_AD_LIMIT = 10;
+
+function getKLDateString(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+// Read-only lookup of how many ad-rewards this device has left today —
+// used to show "{n}/10 left today" in the Free Credits info dialog,
+// without mutating anything.
+export async function getDailyAdStatus(deviceId: string): Promise<{ remaining: number; limit: number }> {
+  const user = await getUser(deviceId);
+  const today = getKLDateString();
+  const usedToday = user.daily_ad_date === today ? user.daily_ad_count || 0 : 0;
+  return { remaining: Math.max(0, DAILY_AD_LIMIT - usedToday), limit: DAILY_AD_LIMIT };
 }
 
 // Weighted random reward roll — higher amounts are deliberately rarer.
@@ -572,8 +621,8 @@ export async function claimAdReward(
   deviceId: string,
   adId: number,
   watchSeconds: number
-): Promise<{ success: boolean; message: string; reward?: number; credits?: number }> {
-  const MIN_WATCH_SECONDS = 10;
+): Promise<{ success: boolean; message: string; reward?: number; credits?: number; daily_remaining?: number }> {
+  const MIN_WATCH_SECONDS = 15;
 
   if (watchSeconds < MIN_WATCH_SECONDS) {
     return { success: false, message: 'Ad was not watched long enough.' };
@@ -581,6 +630,17 @@ export async function claimAdReward(
 
   const client = getTursoClient();
   const user = await getUser(deviceId);
+
+  const today = getKLDateString();
+  const usedToday = user.daily_ad_date === today ? user.daily_ad_count || 0 : 0;
+  if (usedToday >= DAILY_AD_LIMIT) {
+    return {
+      success: false,
+      message: 'Daily limit reached. Come back tomorrow for more.',
+      daily_remaining: 0,
+    };
+  }
+
   const adResult = await client.execute({
     sql: 'SELECT * FROM ads WHERE id = ?',
     args: [adId],
@@ -591,7 +651,9 @@ export async function claimAdReward(
   }
 
   const ad = adResult.rows[0] as unknown as AdRecord;
+  const isBroadcast = !ad.target_device_id && !ad.target_telegram_id;
   const targetsThisUser =
+    isBroadcast ||
     ad.target_device_id === deviceId ||
     (ad.target_telegram_id && user.telegram_id && ad.target_telegram_id === user.telegram_id);
 
@@ -599,12 +661,7 @@ export async function claimAdReward(
     return { success: false, message: 'This ad is not available for your account.' };
   }
 
-  const stillActive =
-    ad.limit_type === 'views'
-      ? ad.views_count < ad.limit_value
-      : Date.now() < new Date(ad.created_at + 'Z').getTime() + ad.limit_value * 24 * 60 * 60 * 1000;
-
-  if (!stillActive) {
+  if (!isAdStillActive(ad)) {
     return { success: false, message: 'This ad is no longer available.' };
   }
 
@@ -615,8 +672,8 @@ export async function claimAdReward(
     args: [adId],
   });
   await client.execute({
-    sql: 'UPDATE users SET credits = credits + ? WHERE device_id = ?',
-    args: [reward, deviceId],
+    sql: 'UPDATE users SET credits = credits + ?, daily_ad_count = ?, daily_ad_date = ? WHERE device_id = ?',
+    args: [reward, usedToday + 1, today, deviceId],
   });
 
   const updatedUser = await getUser(deviceId);
@@ -626,5 +683,6 @@ export async function claimAdReward(
     message: `You earned ${reward} credits!`,
     reward,
     credits: updatedUser.credits,
+    daily_remaining: DAILY_AD_LIMIT - (usedToday + 1),
   };
 }
